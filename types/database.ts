@@ -53,6 +53,11 @@ export type IncidentStatus = 'DETECTED' | 'VERIFYING' | 'VERIFIED' | 'DISPATCHED
 export type EventType = 'INCIDENT_CREATED' | 'INCIDENT_VERIFICATION_STARTED' | 'INCIDENT_VERIFIED' | 'INCIDENT_MARKED_FALSE_ALARM' | 'INCIDENT_DISPATCHED' | 'RESPONDER_ACCEPTED' | 'RESPONDER_ARRIVED' | 'INCIDENT_RESOLVED'
 export type ResponderAssignmentStatus = 'ASSIGNED' | 'ACCEPTED' | 'DECLINED' | 'ARRIVED' | 'COMPLETED'
 
+// M3 — Signal Detection
+export type SignalSource = 'MOBILE' | 'REACT_NODE' | 'DASHBOARD'
+export type SignalType = 'SOS' | 'PANIC_BUTTON' | 'IMPACT' | 'SMOKE' | 'GAS' | 'TEMPERATURE' | 'MOTION' | 'MANUAL_REPORT' | 'UNKNOWN'
+export type DetectionAction = 'INCIDENT_CANDIDATE' | 'MONITORING' | 'RECORD_ONLY' | 'DUPLICATE' | 'INVALID'
+
 export interface Incident {
   id: string
   organization_id: string
@@ -94,4 +99,33 @@ export interface IncidentResponder {
   arrived_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface SignalEvent {
+  id: string
+  organization_id: string
+  device_id: string | null
+  source: SignalSource
+  signal_type: SignalType
+  severity: IncidentSeverity
+  confidence: number | null
+  latitude: number | null
+  longitude: number | null
+  occurred_at: string
+  metadata: Record<string, any>
+  created_at: string
+}
+
+export interface SignalDetection {
+  id: string
+  signal_event_id: string
+  organization_id: string
+  action: DetectionAction
+  severity: IncidentSeverity
+  requires_verification: boolean
+  reason: string
+  confidence: number
+  recommended_incident_type: IncidentType | null
+  incident_id: string | null
+  created_at: string
 }
