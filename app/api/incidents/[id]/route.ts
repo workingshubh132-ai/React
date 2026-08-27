@@ -43,16 +43,55 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .eq('incident_id', id)
       .order('created_at', { ascending: true })
 
-    // Get responder assignments
+    // Get responder assignments with profile information
     const { data: assignments, error: assignmentsError } = await supabase
       .from('incident_responders')
-      .select('*')
+      .select(
+        `
+        id,
+        responder_id,
+        status,
+        assigned_at,
+        accepted_at,
+        arrived_at,
+        responders!inner(
+          id,
+          profile_id,
+          profiles!inner(
+            full_name
+          )
+        )
+      `
+      )
       .eq('incident_id', id)
+
+    // Calculate elapsed time and response metrics
+    const now = new Date()
+    const detectedAt = new Date(incident.detected_at)
+    const elapsedMs = now.getTime() - detectedAt.getTime()
+    const elapsedSeconds = Math.floor(elapsedMs / 1000)
+
+    let detectionToVerificationMs: number | null = null
+    let verificationToDispatchMs: number | null = null
+    let dispatchToRespondingMs: number | null = null
+
+    if (incident.verified_at) {
+      detectionToVerificationMs = new Date(incident.verified_at).getTime() - detectedAt.getTime()
+    }
+    if (incident.dispatched_at && incident.verified_at) {
+      verificationToDispatchMs =
+        new Date(incident.dispatched_at).getTime() - new Date(incident.verified_at).getTime()
+    }
 
     return NextResponse.json({
       incident: incident as Incident,
       events: events || [],
       assignments: assignments || [],
+      metrics: {
+        elapsed_seconds: elapsedSeconds,
+        detection_to_verification_ms: detectionToVerificationMs,
+        verification_to_dispatch_ms: verificationToDispatchMs,
+      },
     })
   } catch (error) {
     console.error('GET /api/incidents/[id] error:', error)
