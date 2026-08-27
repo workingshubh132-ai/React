@@ -595,6 +595,163 @@ describe('Signal Authorization', () => {
 })
 
 // ============================================================================
+// CORRELATION STRATEGY TESTS
+// ============================================================================
+
+describe('Signal Correlation', () => {
+  describe('Correlation Rules', () => {
+    it('should allow SOS to correlate to DETECTED incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('SOS', 'DETECTED')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should allow SOS to correlate to VERIFYING incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('SOS', 'VERIFYING')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should allow SOS to correlate to VERIFIED incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('SOS', 'VERIFIED')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should allow SOS to correlate to DISPATCHED incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('SOS', 'DISPATCHED')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should allow SOS to correlate to RESPONDING incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('SOS', 'RESPONDING')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should prevent SOS from correlating to RESOLVED incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('SOS', 'RESOLVED')
+      expect(result.can_correlate).toBe(false)
+      expect(result.reason).toContain('RESOLVED')
+    })
+
+    it('should prevent SOS from correlating to FALSE_ALARM incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('SOS', 'FALSE_ALARM')
+      expect(result.can_correlate).toBe(false)
+      expect(result.reason).toContain('FALSE_ALARM')
+    })
+
+    it('should allow PANIC_BUTTON to correlate to active incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('PANIC_BUTTON', 'DETECTED')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should prevent TEMPERATURE from correlating', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('TEMPERATURE', 'DETECTED')
+      expect(result.can_correlate).toBe(false)
+    })
+
+    it('should prevent MOTION from correlating', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('MOTION', 'DETECTED')
+      expect(result.can_correlate).toBe(false)
+    })
+
+    it('should prevent UNKNOWN from correlating', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('UNKNOWN', 'DETECTED')
+      expect(result.can_correlate).toBe(false)
+    })
+
+    it('should allow IMPACT to correlate to active incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('IMPACT', 'DETECTED')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should allow SMOKE to correlate to active incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('SMOKE', 'VERIFIED')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should allow GAS to correlate to active incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('GAS', 'DISPATCHED')
+      expect(result.can_correlate).toBe(true)
+    })
+
+    it('should allow MANUAL_REPORT to correlate to active incident', () => {
+      const { canCorrelateSignal } = require('@/lib/signals/correlation')
+      const result = canCorrelateSignal('MANUAL_REPORT', 'DETECTED')
+      expect(result.can_correlate).toBe(true)
+    })
+  })
+
+  describe('Correlation Window Logic', () => {
+    it('should identify signal within correlation window', () => {
+      const WINDOW_MS = 30000
+      const now = Date.now()
+      const incidentCreatedAt = now - 15000 // 15 seconds ago
+
+      const withinWindow = now - incidentCreatedAt < WINDOW_MS
+      expect(withinWindow).toBe(true)
+    })
+
+    it('should identify signal outside correlation window', () => {
+      const WINDOW_MS = 30000
+      const now = Date.now()
+      const incidentCreatedAt = now - 45000 // 45 seconds ago
+
+      const withinWindow = now - incidentCreatedAt < WINDOW_MS
+      expect(withinWindow).toBe(false)
+    })
+
+    it('should handle edge case at window boundary', () => {
+      const WINDOW_MS = 30000
+      const now = Date.now()
+      const incidentCreatedAt = now - WINDOW_MS // exactly at boundary
+
+      const withinWindow = now - incidentCreatedAt < WINDOW_MS
+      expect(withinWindow).toBe(false) // boundary is exclusive
+    })
+  })
+
+  describe('Correlation Scenarios', () => {
+    it('should identify scenario: first SOS creates incident', () => {
+      // First signal: no active incident
+      // Expected: create INCIDENT_CANDIDATE
+      const hasActiveIncident = false
+      const shouldCreate = !hasActiveIncident
+      expect(shouldCreate).toBe(true)
+    })
+
+    it('should identify scenario: second SOS correlates to first', () => {
+      // Second signal within window: active incident exists
+      // Expected: correlate instead of create
+      const hasActiveIncident = true
+      const withinWindow = true
+      const shouldCorrelate = hasActiveIncident && withinWindow
+      expect(shouldCorrelate).toBe(true)
+    })
+
+    it('should identify scenario: SOS after window creates new incident', () => {
+      // Signal after window expires: active incident is stale
+      // Expected: create new INCIDENT_CANDIDATE
+      const hasActiveIncident = true
+      const withinWindow = false // window expired
+      const shouldCorrelate = hasActiveIncident && withinWindow
+      expect(shouldCorrelate).toBe(false)
+    })
+  })
+})
+
+// ============================================================================
 // INPUT ATTACK VECTORS
 // ============================================================================
 

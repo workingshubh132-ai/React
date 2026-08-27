@@ -3,6 +3,12 @@ import type { SignalEvent, SignalDetection } from '@/types/database'
 import { validateSignal, type RawSignalInput, type NormalizedSignal } from './validation'
 import { detectFromSignal, type DetectionResult } from './detection'
 import { checkDuplicate, updateDeduplicationState } from './deduplication'
+import {
+  getCorrelationWindowMs,
+  findActiveIncidentForCorrelation,
+  canCorrelateSignal,
+  correlateSignalToIncident,
+} from './correlation'
 import { createIncident } from '@/lib/incidents'
 
 export interface CreateSignalParams {
@@ -192,32 +198,76 @@ export async function processSignal(
 
     const detectionRecord = detectionData as SignalDetection
 
-    // 9. CREATE incident candidate if applicable
+    // 9. ATTEMPT CORRELATION or CREATE incident candidate
     let incident_id: string | undefined
 
     if (finalAction === 'INCIDENT_CANDIDATE') {
-      const incidentResult = await createIncident(supabase, {
+      // Try to correlate to existing active incident
+      const correlationWindowMs = await getCorrelationWindowMs(supabase)
+      const activeIncidentResult = await findActiveIncidentForCorrelation(
+        supabase,
         organization_id,
-        incident_type: detection.recommended_incident_type || 'OTHER',
-        severity: detection.severity,
-        title: `Signal: ${signal.signal_type}`,
-        description: `Detected from ${signal.source}: ${detection.reason}`,
-        device_id: signal.device_id,
-        latitude: signal.latitude,
-        longitude: signal.longitude,
-      })
+        correlationWindowMs
+      )
 
-      if ('incident' in incidentResult) {
-        incident_id = incidentResult.incident.id
+      if (!activeIncidentResult.error && activeIncidentResult.incident_id && activeIncidentResult.incident_status) {
+        // Check if this signal can be correlated to the active incident
+        const correlationCheck = canCorrelateSignal(signal.signal_type, activeIncidentResult.incident_status)
 
-        // Update detection record with incident reference
-        await supabase
-          .from('signal_detections')
-          .update({ incident_id })
-          .eq('id', detectionRecord.id)
-      } else {
-        // Incident creation failed — log but don't block signal processing
-        console.error('Failed to create incident candidate:', incidentResult.error)
+        if (correlationCheck.can_correlate) {
+          // Correlate to existing incident instead of creating a new one
+          incident_id = activeIncidentResult.incident_id
+
+          const correlationResult = await correlateSignalToIncident(
+            supabase,
+            organization_id,
+            signalEvent.id,
+            incident_id,
+            correlationCheck.reason
+          )
+
+          if (correlationResult.success) {
+            // Update detection record with incident reference
+            await supabase
+              .from('signal_detections')
+              .update({ incident_id })
+              .eq('id', detectionRecord.id)
+
+            // Log correlation
+            console.log(`Signal correlated to incident ${incident_id}: ${correlationCheck.reason}`)
+          } else {
+            // Correlation failed — continue to create new incident
+            console.warn('Correlation failed, creating new incident:', correlationResult.error)
+            incident_id = undefined
+          }
+        }
+      }
+
+      // If no correlation, create new incident
+      if (!incident_id) {
+        const incidentResult = await createIncident(supabase, {
+          organization_id,
+          incident_type: detection.recommended_incident_type || 'OTHER',
+          severity: detection.severity,
+          title: `Signal: ${signal.signal_type}`,
+          description: `Detected from ${signal.source}: ${detection.reason}`,
+          device_id: signal.device_id,
+          latitude: signal.latitude,
+          longitude: signal.longitude,
+        })
+
+        if ('incident' in incidentResult) {
+          incident_id = incidentResult.incident.id
+
+          // Update detection record with incident reference
+          await supabase
+            .from('signal_detections')
+            .update({ incident_id })
+            .eq('id', detectionRecord.id)
+        } else {
+          // Incident creation failed — log but don't block signal processing
+          console.error('Failed to create incident candidate:', incidentResult.error)
+        }
       }
     }
 
