@@ -1,16 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import type { Incident, IncidentStatus, IncidentEvent, IncidentResponder } from '@/types/database'
 
-const VALID_TRANSITIONS: Record<IncidentStatus, IncidentStatus[]> = {
-  DETECTED: ['VERIFYING', 'FALSE_ALARM'],
-  VERIFYING: ['VERIFIED', 'FALSE_ALARM'],
-  VERIFIED: ['DISPATCHED'],
-  DISPATCHED: ['RESPONDING', 'FALSE_ALARM'],
-  RESPONDING: ['RESOLVED', 'FALSE_ALARM'],
-  RESOLVED: [],
-  FALSE_ALARM: [],
-}
-
 interface CreateIncidentParams {
   organization_id: string
   incident_type: Incident['incident_type']
@@ -23,21 +13,12 @@ interface CreateIncidentParams {
   longitude?: number | null
 }
 
-interface AssignRespondersParams {
+interface TransitionResult {
+  success: boolean
   incident_id: string
-  responder_ids: string[]
-  organization_id: string
-  actor_id: string
-}
-
-interface UpdateResponderStatusParams {
-  incident_responder_id: string
-  status: 'ACCEPTED' | 'DECLINED' | 'ARRIVED' | 'COMPLETED'
-  actor_id: string
-}
-
-function isValidTransition(from: IncidentStatus, to: IncidentStatus): boolean {
-  return VALID_TRANSITIONS[from].includes(to)
+  new_status?: string
+  event_id?: string
+  error_message?: string
 }
 
 export async function createIncident(
@@ -45,6 +26,7 @@ export async function createIncident(
   params: CreateIncidentParams
 ): Promise<{ incident: Incident; event: IncidentEvent } | { error: string }> {
   try {
+    // Create incident directly (no RPC needed for initial creation with hardcoded DETECTED status)
     const { data, error } = await supabase
       .from('incidents')
       .insert({
@@ -67,7 +49,7 @@ export async function createIncident(
 
     const incident = data as Incident
 
-    // Record creation event
+    // Record creation event (atomic with creation via database trigger or explicit insert)
     const { data: eventData, error: eventError } = await supabase
       .from('incident_events')
       .insert({
@@ -99,81 +81,38 @@ export async function verifyIncident(
   start_verification?: boolean
 ): Promise<{ incident: Incident; event: IncidentEvent } | { error: string }> {
   try {
-    // Fetch current incident
-    const { data: incident, error: fetchError } = await supabase
+    const rpcFunction = start_verification
+      ? 'transition_incident_to_verifying'
+      : 'transition_incident_to_verified'
+
+    const { data, error } = await supabase.rpc(rpcFunction, {
+      p_incident_id: incident_id,
+      p_organization_id: organization_id,
+      p_actor_id: actor_id,
+    })
+
+    if (error) return { error: error.message }
+
+    if (!data || !data[0]?.success) {
+      return { error: data?.[0]?.error_message || 'Transition failed' }
+    }
+
+    // Fetch the updated incident and event
+    const { data: incident } = await supabase
       .from('incidents')
       .select()
       .eq('id', incident_id)
-      .eq('organization_id', organization_id)
       .single()
 
-    if (fetchError || !incident) return { error: 'Incident not found' }
+    const { data: event } = await supabase
+      .from('incident_events')
+      .select()
+      .eq('id', data[0].event_id)
+      .single()
 
-    const currentStatus = incident.status as IncidentStatus
+    if (!incident || !event) return { error: 'Failed to fetch updated records' }
 
-    if (start_verification) {
-      if (!isValidTransition(currentStatus, 'VERIFYING')) {
-        return { error: `Cannot start verification from ${currentStatus}` }
-      }
-
-      const { data, error } = await supabase
-        .from('incidents')
-        .update({ status: 'VERIFYING', updated_at: new Date().toISOString() })
-        .eq('id', incident_id)
-        .select()
-        .single()
-
-      if (error) return { error: error.message }
-
-      const { data: eventData, error: eventError } = await supabase
-        .from('incident_events')
-        .insert({
-          incident_id,
-          organization_id,
-          event_type: 'INCIDENT_VERIFICATION_STARTED',
-          actor_id,
-          metadata: {},
-        })
-        .select()
-        .single()
-
-      if (eventError) return { error: eventError.message }
-
-      return { incident: data as Incident, event: eventData as IncidentEvent }
-    } else {
-      if (!isValidTransition(currentStatus, 'VERIFIED')) {
-        return { error: `Cannot mark verified from ${currentStatus}` }
-      }
-
-      const { data, error } = await supabase
-        .from('incidents')
-        .update({
-          status: 'VERIFIED',
-          verified_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', incident_id)
-        .select()
-        .single()
-
-      if (error) return { error: error.message }
-
-      const { data: eventData, error: eventError } = await supabase
-        .from('incident_events')
-        .insert({
-          incident_id,
-          organization_id,
-          event_type: 'INCIDENT_VERIFIED',
-          actor_id,
-          metadata: {},
-        })
-        .select()
-        .single()
-
-      if (eventError) return { error: eventError.message }
-
-      return { incident: data as Incident, event: eventData as IncidentEvent }
-    }
+    return { incident: incident as Incident, event: event as IncidentEvent }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' }
   }
@@ -186,48 +125,33 @@ export async function markFalseAlarm(
   actor_id: string
 ): Promise<{ incident: Incident; event: IncidentEvent } | { error: string }> {
   try {
-    const { data: incident, error: fetchError } = await supabase
-      .from('incidents')
-      .select()
-      .eq('id', incident_id)
-      .eq('organization_id', organization_id)
-      .single()
-
-    if (fetchError || !incident) return { error: 'Incident not found' }
-
-    const currentStatus = incident.status as IncidentStatus
-    if (!isValidTransition(currentStatus, 'FALSE_ALARM')) {
-      return { error: `Cannot mark false alarm from ${currentStatus}` }
-    }
-
-    const { data, error } = await supabase
-      .from('incidents')
-      .update({
-        status: 'FALSE_ALARM',
-        resolved_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', incident_id)
-      .select()
-      .single()
+    const { data, error } = await supabase.rpc('transition_incident_to_false_alarm', {
+      p_incident_id: incident_id,
+      p_organization_id: organization_id,
+      p_actor_id: actor_id,
+    })
 
     if (error) return { error: error.message }
 
-    const { data: eventData, error: eventError } = await supabase
-      .from('incident_events')
-      .insert({
-        incident_id,
-        organization_id,
-        event_type: 'INCIDENT_MARKED_FALSE_ALARM',
-        actor_id,
-        metadata: {},
-      })
+    if (!data || !data[0]?.success) {
+      return { error: data?.[0]?.error_message || 'Transition failed' }
+    }
+
+    const { data: incident } = await supabase
+      .from('incidents')
       .select()
+      .eq('id', incident_id)
       .single()
 
-    if (eventError) return { error: eventError.message }
+    const { data: event } = await supabase
+      .from('incident_events')
+      .select()
+      .eq('id', data[0].event_id)
+      .single()
 
-    return { incident: data as Incident, event: eventData as IncidentEvent }
+    if (!incident || !event) return { error: 'Failed to fetch updated records' }
+
+    return { incident: incident as Incident, event: event as IncidentEvent }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' }
   }
@@ -241,63 +165,43 @@ export async function dispatchIncident(
   actor_id: string
 ): Promise<{ incident: Incident; event: IncidentEvent; assignments: IncidentResponder[] } | { error: string }> {
   try {
-    const { data: incident, error: fetchError } = await supabase
-      .from('incidents')
-      .select()
-      .eq('id', incident_id)
-      .eq('organization_id', organization_id)
-      .single()
-
-    if (fetchError || !incident) return { error: 'Incident not found' }
-
-    const currentStatus = incident.status as IncidentStatus
-    if (!isValidTransition(currentStatus, 'DISPATCHED')) {
-      return { error: `Cannot dispatch from ${currentStatus}` }
-    }
-
-    const { data, error } = await supabase
-      .from('incidents')
-      .update({
-        status: 'DISPATCHED',
-        dispatched_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', incident_id)
-      .select()
-      .single()
+    const { data, error } = await supabase.rpc('transition_incident_to_dispatched', {
+      p_incident_id: incident_id,
+      p_organization_id: organization_id,
+      p_actor_id: actor_id,
+      p_responder_ids: responder_ids,
+    })
 
     if (error) return { error: error.message }
 
-    const { data: eventData, error: eventError } = await supabase
-      .from('incident_events')
-      .insert({
-        incident_id,
-        organization_id,
-        event_type: 'INCIDENT_DISPATCHED',
-        actor_id,
-        metadata: { responder_count: responder_ids.length },
-      })
+    if (!data || !data[0]?.success) {
+      return { error: data?.[0]?.error_message || 'Transition failed' }
+    }
+
+    const { data: incident } = await supabase
+      .from('incidents')
       .select()
+      .eq('id', incident_id)
       .single()
 
-    if (eventError) return { error: eventError.message }
-
-    // Assign responders
-    const { data: assignments, error: assignError } = await supabase
-      .from('incident_responders')
-      .insert(
-        responder_ids.map((responder_id) => ({
-          incident_id,
-          responder_id,
-          organization_id,
-          status: 'ASSIGNED',
-        }))
-      )
+    const { data: event } = await supabase
+      .from('incident_events')
       .select()
+      .eq('id', data[0].event_id)
+      .single()
 
-    if (assignError) return { error: assignError.message }
+    const { data: assignments } = await supabase
+      .from('incident_responders')
+      .select()
+      .eq('incident_id', incident_id)
 
-    return { incident: data as Incident, event: eventData as IncidentEvent, assignments: assignments as IncidentResponder[] }
+    if (!incident || !event) return { error: 'Failed to fetch updated records' }
+
+    return {
+      incident: incident as Incident,
+      event: event as IncidentEvent,
+      assignments: (assignments || []) as IncidentResponder[],
+    }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' }
   }
@@ -310,47 +214,33 @@ export async function respondToIncident(
   actor_id: string
 ): Promise<{ incident: Incident; event: IncidentEvent } | { error: string }> {
   try {
-    const { data: incident, error: fetchError } = await supabase
-      .from('incidents')
-      .select()
-      .eq('id', incident_id)
-      .eq('organization_id', organization_id)
-      .single()
-
-    if (fetchError || !incident) return { error: 'Incident not found' }
-
-    const currentStatus = incident.status as IncidentStatus
-    if (!isValidTransition(currentStatus, 'RESPONDING')) {
-      return { error: `Cannot respond from ${currentStatus}` }
-    }
-
-    const { data, error } = await supabase
-      .from('incidents')
-      .update({
-        status: 'RESPONDING',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', incident_id)
-      .select()
-      .single()
+    const { data, error } = await supabase.rpc('transition_incident_to_responding', {
+      p_incident_id: incident_id,
+      p_organization_id: organization_id,
+      p_actor_id: actor_id,
+    })
 
     if (error) return { error: error.message }
 
-    const { data: eventData, error: eventError } = await supabase
-      .from('incident_events')
-      .insert({
-        incident_id,
-        organization_id,
-        event_type: 'RESPONDER_ARRIVED',
-        actor_id,
-        metadata: {},
-      })
+    if (!data || !data[0]?.success) {
+      return { error: data?.[0]?.error_message || 'Transition failed' }
+    }
+
+    const { data: incident } = await supabase
+      .from('incidents')
       .select()
+      .eq('id', incident_id)
       .single()
 
-    if (eventError) return { error: eventError.message }
+    const { data: event } = await supabase
+      .from('incident_events')
+      .select()
+      .eq('id', data[0].event_id)
+      .single()
 
-    return { incident: data as Incident, event: eventData as IncidentEvent }
+    if (!incident || !event) return { error: 'Failed to fetch updated records' }
+
+    return { incident: incident as Incident, event: event as IncidentEvent }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' }
   }
@@ -363,48 +253,33 @@ export async function resolveIncident(
   actor_id: string
 ): Promise<{ incident: Incident; event: IncidentEvent } | { error: string }> {
   try {
-    const { data: incident, error: fetchError } = await supabase
-      .from('incidents')
-      .select()
-      .eq('id', incident_id)
-      .eq('organization_id', organization_id)
-      .single()
-
-    if (fetchError || !incident) return { error: 'Incident not found' }
-
-    const currentStatus = incident.status as IncidentStatus
-    if (!isValidTransition(currentStatus, 'RESOLVED')) {
-      return { error: `Cannot resolve from ${currentStatus}` }
-    }
-
-    const { data, error } = await supabase
-      .from('incidents')
-      .update({
-        status: 'RESOLVED',
-        resolved_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', incident_id)
-      .select()
-      .single()
+    const { data, error } = await supabase.rpc('transition_incident_to_resolved', {
+      p_incident_id: incident_id,
+      p_organization_id: organization_id,
+      p_actor_id: actor_id,
+    })
 
     if (error) return { error: error.message }
 
-    const { data: eventData, error: eventError } = await supabase
-      .from('incident_events')
-      .insert({
-        incident_id,
-        organization_id,
-        event_type: 'INCIDENT_RESOLVED',
-        actor_id,
-        metadata: {},
-      })
+    if (!data || !data[0]?.success) {
+      return { error: data?.[0]?.error_message || 'Transition failed' }
+    }
+
+    const { data: incident } = await supabase
+      .from('incidents')
       .select()
+      .eq('id', incident_id)
       .single()
 
-    if (eventError) return { error: eventError.message }
+    const { data: event } = await supabase
+      .from('incident_events')
+      .select()
+      .eq('id', data[0].event_id)
+      .single()
 
-    return { incident: data as Incident, event: eventData as IncidentEvent }
+    if (!incident || !event) return { error: 'Failed to fetch updated records' }
+
+    return { incident: incident as Incident, event: event as IncidentEvent }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' }
   }
@@ -417,48 +292,33 @@ export async function updateResponderStatus(
   actor_id: string
 ): Promise<{ assignment: IncidentResponder; event: IncidentEvent } | { error: string }> {
   try {
-    const { data: assignment, error: fetchError } = await supabase
-      .from('incident_responders')
-      .select()
-      .eq('id', incident_responder_id)
-      .single()
-
-    if (fetchError || !assignment) return { error: 'Assignment not found' }
-
-    const updateData: any = {
-      status,
-      updated_at: new Date().toISOString(),
-    }
-
-    if (status === 'ACCEPTED') updateData.accepted_at = new Date().toISOString()
-    if (status === 'ARRIVED') updateData.arrived_at = new Date().toISOString()
-
-    const { data, error } = await supabase
-      .from('incident_responders')
-      .update(updateData)
-      .eq('id', incident_responder_id)
-      .select()
-      .single()
+    const { data, error } = await supabase.rpc('update_responder_assignment_status', {
+      p_assignment_id: incident_responder_id,
+      p_new_status: status,
+      p_actor_id: actor_id,
+    })
 
     if (error) return { error: error.message }
 
-    const eventType = status === 'ACCEPTED' ? 'RESPONDER_ACCEPTED' : status === 'ARRIVED' ? 'RESPONDER_ARRIVED' : 'INCIDENT_RESOLVED'
+    if (!data || !data[0]?.success) {
+      return { error: data?.[0]?.error_message || 'Update failed' }
+    }
 
-    const { data: eventData, error: eventError } = await supabase
-      .from('incident_events')
-      .insert({
-        incident_id: assignment.incident_id,
-        organization_id: assignment.organization_id,
-        event_type: eventType as any,
-        actor_id,
-        metadata: { responder_id: assignment.responder_id },
-      })
+    const { data: assignment } = await supabase
+      .from('incident_responders')
       .select()
+      .eq('id', incident_responder_id)
       .single()
 
-    if (eventError) return { error: eventError.message }
+    const { data: event } = await supabase
+      .from('incident_events')
+      .select()
+      .eq('id', data[0].event_id)
+      .single()
 
-    return { assignment: data as IncidentResponder, event: eventData as IncidentEvent }
+    if (!assignment || !event) return { error: 'Failed to fetch updated records' }
+
+    return { assignment: assignment as IncidentResponder, event: event as IncidentEvent }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' }
   }
