@@ -30,7 +30,7 @@ export default function DispatchModal({ incidentId, organizationId, onClose, onS
 
   // Fetch available responders
   useEffect(() => {
-    const fetch = async () => {
+    const fetchResponders = async () => {
       try {
         const response = await fetch('/api/responders/available')
         if (response.ok) {
@@ -45,7 +45,7 @@ export default function DispatchModal({ incidentId, organizationId, onClose, onS
       }
     }
 
-    fetch()
+    fetchResponders()
   }, [])
 
   // Handle dispatch

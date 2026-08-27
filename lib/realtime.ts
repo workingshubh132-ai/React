@@ -20,7 +20,7 @@ const subscriptions = new Map<string, RealtimeSubscription>()
 export function subscribeToActiveIncidents(
   supabase: SupabaseClient,
   organizationId: string,
-  onIncidentsChange: (incidents: any[]) => void,
+  onIncidentsChange: () => void,
   onError?: (error: Error) => void
 ): () => void {
   const channelName = `org-${organizationId}-incidents`
@@ -40,9 +40,9 @@ export function subscribeToActiveIncidents(
         table: 'incidents',
         filter: `organization_id=eq.${organizationId}`,
       },
-      (payload) => {
+      () => {
         // Trigger refetch of incidents
-        onIncidentsChange(payload)
+        onIncidentsChange()
       }
     )
     .on('system', { event: 'join' }, () => {
@@ -74,7 +74,7 @@ export function subscribeToActiveIncidents(
 export function subscribeToIncidentAssignments(
   supabase: SupabaseClient,
   incidentId: string,
-  onAssignmentsChange: (assignments: any[]) => void,
+  onAssignmentsChange: () => void,
   onError?: (error: Error) => void
 ): () => void {
   const channelName = `incident-${incidentId}-assignments`
@@ -93,8 +93,8 @@ export function subscribeToIncidentAssignments(
         table: 'incident_responders',
         filter: `incident_id=eq.${incidentId}`,
       },
-      (payload) => {
-        onAssignmentsChange(payload)
+      () => {
+        onAssignmentsChange()
       }
     )
     .subscribe((status) => {
@@ -118,7 +118,7 @@ export function subscribeToIncidentAssignments(
 export function subscribeToResponderStatus(
   supabase: SupabaseClient,
   organizationId: string,
-  onStatusChange: (responder: any) => void,
+  onStatusChange: () => void,
   onError?: (error: Error) => void
 ): () => void {
   const channelName = `org-${organizationId}-responders`
@@ -137,8 +137,8 @@ export function subscribeToResponderStatus(
         table: 'responders',
         filter: `organization_id=eq.${organizationId}`,
       },
-      (payload) => {
-        onStatusChange(payload.new)
+      () => {
+        onStatusChange()
       }
     )
     .subscribe((status) => {
@@ -162,7 +162,7 @@ export function subscribeToResponderStatus(
 export function subscribeToResponderAssignments(
   supabase: SupabaseClient,
   responderId: string,
-  onAssignmentChange: (assignment: any) => void,
+  onAssignmentChange: () => void,
   onError?: (error: Error) => void
 ): () => void {
   const channelName = `responder-${responderId}-assignments`
@@ -181,8 +181,8 @@ export function subscribeToResponderAssignments(
         table: 'incident_responders',
         filter: `responder_id=eq.${responderId}`,
       },
-      (payload) => {
-        onAssignmentChange(payload)
+      () => {
+        onAssignmentChange()
       }
     )
     .subscribe((status) => {

@@ -185,6 +185,8 @@ export default function ResponderDashboard({ responderId, userId, organizationId
               const nextAction = getNextAction(assignment.status)
               const isActing = actingAssignmentId === assignment.id && actionInProgress
 
+              if (!incident) return null
+
               return (
                 <div key={assignment.id} className="rounded-lg border border-slate-700 bg-slate-800 p-4 sm:p-6">
                   {/* Incident header */}
