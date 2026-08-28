@@ -114,15 +114,35 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       updateData[timestampField] = new Date().toISOString()
     }
 
-    // Update assignment
+    // Update assignment with status validation to prevent concurrent modification race conditions
     const { data: updatedAssignment, error: updateError } = await supabase
       .from('incident_responders')
       .update(updateData)
       .eq('id', id)
+      .eq('status', assignment.status)  // Optimistic lock: only update if status hasn't changed
       .select()
       .single()
 
-    if (updateError || !updatedAssignment) {
+    // If update returned no rows, status changed between read and write (concurrent modification)
+    if (updateError?.code === 'PGRST116' || (!updateError && !updatedAssignment)) {
+      // Re-fetch current assignment to report actual state
+      const { data: currentAssignment } = await supabase
+        .from('incident_responders')
+        .select()
+        .eq('id', id)
+        .single()
+
+      return NextResponse.json(
+        {
+          error: 'Assignment state changed. Please refresh and try again.',
+          currentStatus: currentAssignment?.status || 'UNKNOWN',
+          expectedStatus: assignment.status,
+        },
+        { status: 409 }
+      )
+    }
+
+    if (updateError) {
       console.error('Failed to update assignment:', updateError)
       return NextResponse.json({ error: 'Failed to update assignment' }, { status: 500 })
     }

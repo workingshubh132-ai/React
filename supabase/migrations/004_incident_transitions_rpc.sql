@@ -240,12 +240,21 @@ BEGIN
   )
   RETURNING incident_events.id INTO v_event_id;
 
-  -- Assign responders (will fail if responder_ids are invalid)
+  -- Assign responders - validate each responder belongs to the organization
+  -- This prevents cross-organization responder assignment (IDOR-like vulnerability)
   INSERT INTO incident_responders (incident_id, responder_id, organization_id, status)
-  SELECT p_incident_id, responder_id, p_organization_id, 'ASSIGNED'
-  FROM UNNEST(p_responder_ids) AS responder_id;
+  SELECT p_incident_id, r.id, p_organization_id, 'ASSIGNED'
+  FROM UNNEST(p_responder_ids) AS responder_id
+  JOIN responders r ON r.id = responder_id AND r.organization_id = p_organization_id;
 
   GET DIAGNOSTICS v_assignment_count = ROW_COUNT;
+
+  -- Verify we assigned all requested responders
+  IF v_assignment_count < array_length(p_responder_ids, 1) THEN
+    RETURN QUERY SELECT FALSE, p_incident_id::UUID, NULL::TEXT, NULL::UUID, v_assignment_count::INT,
+      'Some responders do not belong to the organization'::TEXT;
+    RETURN;
+  END IF;
 
   RETURN QUERY SELECT TRUE, p_incident_id::UUID, 'DISPATCHED'::TEXT, v_event_id::UUID, v_assignment_count::INT, NULL::TEXT;
 END;
