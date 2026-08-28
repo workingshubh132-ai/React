@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToResponderAssignments } from '@/lib/realtime'
 import LogoutButton from '@/components/LogoutButton'
@@ -31,7 +31,7 @@ export default function ResponderDashboard({ responderId, userId, organizationId
   const [actionInProgress, setActionInProgress] = useState(false)
 
   // Fetch assigned incidents
-  const fetchAssignments = async () => {
+  const fetchAssignments = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('incident_responders')
@@ -66,7 +66,7 @@ export default function ResponderDashboard({ responderId, userId, organizationId
     } catch (err) {
       console.error('Failed to fetch assignments:', err)
     }
-  }
+  }, [responderId, supabase])
 
   // Initial load
   useEffect(() => {
@@ -77,7 +77,7 @@ export default function ResponderDashboard({ responderId, userId, organizationId
     }
 
     load()
-  }, [responderId])
+  }, [fetchAssignments])
 
   // Subscribe to assignment changes
   useEffect(() => {
@@ -93,7 +93,7 @@ export default function ResponderDashboard({ responderId, userId, organizationId
     )
 
     return () => unsubscribe()
-  }, [responderId])
+  }, [responderId, fetchAssignments, supabase])
 
   // Handle assignment action (acknowledge, respond, arrive, complete)
   const handleAssignmentAction = async (assignmentId: string, action: string) => {

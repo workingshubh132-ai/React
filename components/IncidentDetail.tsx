@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToIncidentAssignments, subscribeToActiveIncidents } from '@/lib/realtime'
@@ -47,7 +47,7 @@ export default function IncidentDetail({ incident: initialIncident, userId, orga
   const [metrics, setMetrics] = useState<any>(null)
 
   // Fetch incident details
-  const fetchIncidentDetail = async () => {
+  const fetchIncidentDetail = useCallback(async () => {
     try {
       const response = await fetch(`/api/incidents/${incident.id}`)
       if (response.ok) {
@@ -60,7 +60,7 @@ export default function IncidentDetail({ incident: initialIncident, userId, orga
     } catch (err) {
       console.error('Failed to fetch incident details:', err)
     }
-  }
+  }, [incident.id])
 
   // Initial load
   useEffect(() => {
@@ -71,7 +71,7 @@ export default function IncidentDetail({ incident: initialIncident, userId, orga
     }
 
     load()
-  }, [])
+  }, [fetchIncidentDetail])
 
   // Subscribe to assignment changes
   useEffect(() => {
@@ -87,7 +87,7 @@ export default function IncidentDetail({ incident: initialIncident, userId, orga
     )
 
     return () => unsubscribe()
-  }, [incident.id])
+  }, [incident.id, fetchIncidentDetail, supabase])
 
   const getSeverityIcon = (severity: string) => {
     switch (severity) {

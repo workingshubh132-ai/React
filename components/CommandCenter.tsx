@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { subscribeToActiveIncidents, subscribeToResponderStatus, cleanupAllSubscriptions } from '@/lib/realtime'
 import LogoutButton from '@/components/LogoutButton'
@@ -24,7 +24,7 @@ export default function CommandCenter({ organizationId, organizationName }: Comm
   const [respondingCount, setRespondingCount] = useState(0)
 
   // Fetch active incidents
-  const fetchIncidents = async () => {
+  const fetchIncidents = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('incidents')
@@ -41,10 +41,10 @@ export default function CommandCenter({ organizationId, organizationName }: Comm
     } catch (err) {
       console.error('Failed to fetch incidents:', err)
     }
-  }
+  }, [organizationId, supabase])
 
   // Fetch responder statistics
-  const fetchResponderStats = async () => {
+  const fetchResponderStats = useCallback(async () => {
     try {
       const { data: responders, error } = await supabase
         .from('responders')
@@ -60,7 +60,7 @@ export default function CommandCenter({ organizationId, organizationName }: Comm
     } catch (err) {
       console.error('Failed to fetch responder stats:', err)
     }
-  }
+  }, [organizationId, supabase])
 
   // Initial load
   useEffect(() => {
@@ -71,7 +71,7 @@ export default function CommandCenter({ organizationId, organizationName }: Comm
     }
 
     load()
-  }, [organizationId])
+  }, [fetchIncidents, fetchResponderStats])
 
   // Setup real-time subscriptions
   useEffect(() => {
@@ -109,7 +109,7 @@ export default function CommandCenter({ organizationId, organizationName }: Comm
       unsubscribeResponders()
       cleanupAllSubscriptions()
     }
-  }, [organizationId])
+  }, [organizationId, fetchIncidents, fetchResponderStats, supabase])
 
   const getConnectionDisplay = () => {
     switch (connectionState) {
