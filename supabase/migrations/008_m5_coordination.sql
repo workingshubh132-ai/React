@@ -60,17 +60,22 @@ SELECT
   i.detected_at,
   i.verified_at,
   i.dispatched_at,
-  EXTRACT(EPOCH FROM (i.verified_at - i.detected_at)) / 1000 as detection_to_verification_ms,
-  EXTRACT(EPOCH FROM (i.dispatched_at - i.verified_at)) / 1000 as verification_to_dispatch_ms,
-  EXTRACT(EPOCH FROM (COALESCE(i.resolved_at, NOW()) - i.detected_at)) / 1000 as total_duration_ms
+  -- EXTRACT(EPOCH ...) yields SECONDS, so multiply by 1000 to get milliseconds
+  EXTRACT(EPOCH FROM (i.verified_at - i.detected_at)) * 1000 as detection_to_verification_ms,
+  EXTRACT(EPOCH FROM (i.dispatched_at - i.verified_at)) * 1000 as verification_to_dispatch_ms,
+  EXTRACT(EPOCH FROM (COALESCE(i.resolved_at, NOW()) - i.detected_at)) * 1000 as total_duration_ms
 FROM incidents i;
 
 -- ============================================================================
 -- ROW LEVEL SECURITY UPDATES
 -- ============================================================================
 
+-- NOTE: PostgreSQL has no IF NOT EXISTS clause for CREATE POLICY (through PG17).
+-- These use DROP POLICY IF EXISTS + CREATE POLICY to stay re-runnable.
+
 -- Responders can update their own availability status
-CREATE POLICY IF NOT EXISTS "responders_update_own_availability" ON responders
+DROP POLICY IF EXISTS "responders_update_own_availability" ON responders;
+CREATE POLICY "responders_update_own_availability" ON responders
   FOR UPDATE
   USING (
     profile_id = auth.uid()
@@ -80,7 +85,8 @@ CREATE POLICY IF NOT EXISTS "responders_update_own_availability" ON responders
   );
 
 -- Supervisors/Admins can update responder availability
-CREATE POLICY IF NOT EXISTS "supervisors_update_responder_availability" ON responders
+DROP POLICY IF EXISTS "supervisors_update_responder_availability" ON responders;
+CREATE POLICY "supervisors_update_responder_availability" ON responders
   FOR UPDATE
   USING (
     organization_id IN (
